@@ -42,6 +42,15 @@ for (const e of response.Exports || []) {
         });
         const r3 = await lClient.send(lCmd);
         console.log(r3.$metadata.httpStatusCode);
+    } else if (e.Name === "downloader-DownloadMappingUUID") {
+        // turn on the dowmload processing from the queue 1
+        console.log("Turning on download queue");
+        const lCmd = new UpdateEventSourceMappingCommand({
+            Enabled: true,
+            UUID: e.Value
+        });
+        const r3 = await lClient.send(lCmd);
+        console.log(r3.$metadata.httpStatusCode);
     } else {
         console.log(e.Name);
     }

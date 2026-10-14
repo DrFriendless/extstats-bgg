@@ -24,3 +24,7 @@ path = "src/system.rs"
 [[bin]]
 name = "add_timestamp"
 path = "src/bin/add_timestamp.rs"
+
+[[bin]]
+name = "download"
+path = "src/bin/download.rs"

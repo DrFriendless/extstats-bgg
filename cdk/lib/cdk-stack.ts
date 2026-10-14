@@ -3,13 +3,11 @@ import { RustFunction } from 'cargo-lambda-cdk';
 import { Construct } from 'constructs';
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as sqs from "aws-cdk-lib/aws-sqs";
-import {Fn} from "aws-cdk-lib";
 import * as sources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as s3 from "aws-cdk-lib/aws-s3";
 
 export const CACHE_BUCKET_NAME = "extstats-cache";
 
-let API_ROLE: iam.IRole | undefined = undefined;
 let BGG_QUEUE1: sqs.IQueue | undefined = undefined;
 let BGG_QUEUE2: sqs.IQueue | undefined = undefined;
 let CACHE_BUCKET: s3.IBucket | undefined = undefined;
@@ -17,8 +15,6 @@ let CACHE_BUCKET: s3.IBucket | undefined = undefined;
 export class RustDownloaderStack extends cdk.Stack {
   lookupExternalResources() {
     // resources external to this stack
-    const arn = Fn.getStackOutput('ApiStack', 'ApiLambdaRole');
-    API_ROLE = iam.Role.fromRoleArn(this, `role_public_api`, arn);
     const q1 = cdk.Fn.importValue('downloader-BGGQueue1ARN');
     const q2 = cdk.Fn.importValue('downloader-BGGQueue2ARN');
     BGG_QUEUE1 = sqs.Queue.fromQueueAttributes(this, "bggQueue1", { queueArn: q1 });
@@ -80,7 +76,7 @@ export class RustDownloaderStack extends cdk.Stack {
     });
   }
 
-    constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
     this.lookupExternalResources();
 
@@ -90,17 +86,19 @@ export class RustDownloaderStack extends cdk.Stack {
       manifestPath: '../bggdl',
       binaryName: "add_timestamp",
       runtime: 'provided.al2023',
-      timeout: cdk.Duration.seconds(30),
+      timeout: cdk.Duration.seconds(3),
       allowPublicSubnet: true,
       role: downloaderRole,
-      memorySize: 128,
-      environment: {
-        "MYSQL_HOST": process.env.MYSQL_HOST!,
-        "MYSQL_USERNAME": process.env.MYSQL_USERNAME!,
-        "MYSQL_PASSWORD": process.env.MYSQL_PASSWORD!,
-        "MYSQL_DATABASE": process.env.MYSQL_DATABASE!,
-        "RUST_BACKTRACE": "1"
-      }
+      memorySize: 128
+    });
+    const downloadFunction = new RustFunction(this, 'rust_fn_download',{
+      manifestPath: '../bggdl',
+      binaryName: "download",
+      runtime: 'provided.al2023',
+      timeout: cdk.Duration.seconds(900),
+      allowPublicSubnet: true,
+      role: downloaderRole,
+      memorySize: 128
     });
 
     if (BGG_QUEUE1) {
@@ -114,9 +112,24 @@ export class RustDownloaderStack extends cdk.Stack {
       console.log("Didn't find QUEUE 1");
     }
 
+    if (BGG_QUEUE2) {
+      const mapping = new sources.SqsEventSource(BGG_QUEUE2, {batchSize: 1, enabled: false});
+      downloadFunction.latestVersion.addEventSource(mapping);
+      new cdk.CfnOutput(this, 'downloaderDownloadMapping', {
+        value: mapping.eventSourceMappingId,
+        exportName: 'downloader-DownloadMappingUUID'
+      });
+    } else {
+      console.log("Didn't find QUEUE 2");
+    }
+
     new cdk.CfnOutput(this, 'rust_add_timestamp', {
       description: 'BGG add timestamp function in Rust',
       value: addTimestampFunction.functionArn,
-    })
+    });
+    new cdk.CfnOutput(this, 'rust_download', {
+      description: 'BGG download function in Rust',
+      value: downloadFunction.functionArn,
+    });
   }
 }
