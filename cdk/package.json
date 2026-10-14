@@ -1,0 +1,25 @@
+{
+  "name": "cdk",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "cdk": "cdk"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.15.0",
+    "@types/node": "^24.10.1",
+    "aws-cdk": "2.1142.0",
+    "tsx": "^4.23.0",
+    "typescript": "~5.9.3"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudwatch-logs": "^3.1149.0",
+    "@aws-sdk/client-lambda": "^3.1149.0",
+    "@aws-sdk/client-cloudformation": "^3.1149.0",
+    "aws-cdk-lib": "^2.269.0",
+    "cargo-lambda-cdk": "^0.0.36",
+    "constructs": "^10.5.0"
+  }
+}

@@ -1,0 +1,26 @@
+[package]
+name = "bggrust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-secretsmanager = "1"
+lambda_runtime = "1.4.0"
+serde_json = "1.0.151"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+aws_lambda_events = "1.2.0"
+aws-sdk-ssm = "1.128.0"
+aws-sdk-sqs = "1.114.0"
+
+[lints.rust]
+linker_messages = "allow"
+
+[lib]
+name = "bggdl"
+path = "src/system.rs"
+
+[[bin]]
+name = "add_timestamp"
+path = "src/bin/add_timestamp.rs"
