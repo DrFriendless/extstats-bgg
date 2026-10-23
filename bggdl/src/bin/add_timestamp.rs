@@ -1,8 +1,6 @@
 use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde_json::{json, Value};
-use aws_config::{BehaviorVersion};
 use aws_sdk_ssm as ssm;
-use aws_sdk_sqs as sqs;
 use std::sync::Arc;
 use aws_lambda_events::event::sqs::SqsEvent;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,23 +8,16 @@ use bggdl::{load_system, DownloadRequest, NEXT_TIME, System};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let sdk_config = Arc::new(aws_config::load_defaults(BehaviorVersion::latest()).await);
-    let sqs_client = Arc::new(sqs::Client::new(&sdk_config));
-    let ssm_client = Arc::new(ssm::Client::new(&sdk_config));
-    let sqs_c = Arc::clone(&sqs_client);
-    let system = Arc::new(load_system(&sqs_c).await?);
+    let system = Arc::new(load_system().await?);
 
     lambda_runtime::run(service_fn(move |event| {
         let system = Arc::clone(&system);
-        let ssm_client = Arc::clone(&ssm_client);
-        let sqs_client = Arc::clone(&sqs_client);
-        async move { handler(&system, &ssm_client, &sqs_client, event).await }
+        async move { handler(&system, event).await }
     })).await
 }
 
 // https://github.com/aws/aws-lambda-rust-runtime
-pub(crate) async fn handler(system: &System, ssm_client: &ssm::Client, sqs_client: &sqs::Client,
-                            event: LambdaEvent<SqsEvent>) -> Result<Value, Error> {
+pub(crate) async fn handler(system: &System, event: LambdaEvent<SqsEvent>) -> Result<Value, Error> {
     let (event, _context) = event.into_parts();
 
 /*    Context {
@@ -49,7 +40,7 @@ pub(crate) async fn handler(system: &System, ssm_client: &ssm::Client, sqs_clien
     }
     */
 
-    let mut next_time = load_next_time(ssm_client).await?;
+    let mut next_time = load_next_time(&system).await?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before 1970")
@@ -66,28 +57,28 @@ pub(crate) async fn handler(system: &System, ssm_client: &ssm::Client, sqs_clien
             next_time += 5000;
         }
         let body = serde_json::to_string(&request)?;
-        send_to_queue(system, sqs_client, body).await?;
+        send_to_queue(system, body).await?;
         if record.receipt_handle.is_some() {
-            remove_from_queue(system, sqs_client, record.receipt_handle.unwrap().as_str()).await?;
+            remove_from_queue(system, record.receipt_handle.unwrap().as_str()).await?;
         }
         // would be safer to write it in the loop, but we probably don't need to be that paranoid
-        write_next_time(ssm_client, next_time).await?;
+        write_next_time(&system, next_time).await?;
     }
     Ok(json!({}))
 }
 
-async fn load_next_time(ssm_client: &ssm::Client) -> Result<i64, Error> {
+async fn load_next_time(system: &System) -> Result<i64, Error> {
     let now_ms: i64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before 1970")
         .as_millis() as i64;
-    let resp = ssm_client.get_parameter().name(NEXT_TIME).send().await?;
+    let resp = system.ssm_client.get_parameter().name(NEXT_TIME).send().await?;
     let ns = resp.parameter().and_then(|p| p.value()).ok_or(now_ms.to_string())?;
     Ok(ns.trim().parse::<i64>()?)
 }
 
-async fn write_next_time(ssm_client: &ssm::Client, when: i64) -> Result<(), Error> {
-    ssm_client
+async fn write_next_time(system: &System, when: i64) -> Result<(), Error> {
+    system.ssm_client
         .put_parameter().name(NEXT_TIME)
         .value(when.to_string())
         .r#type(ssm::types::ParameterType::String)
@@ -97,15 +88,15 @@ async fn write_next_time(ssm_client: &ssm::Client, when: i64) -> Result<(), Erro
     Ok(())
 }
 
-async fn send_to_queue(system: &System, sqs_client: &sqs::Client, body: String) -> Result<(), Error> {
+async fn send_to_queue(system: &System, body: String) -> Result<(), Error> {
     println!("Adding to queue");
-    sqs_client.send_message().queue_url(&system.bgg_queue2_url).message_body(body).send().await?;
+    system.sqs_client.send_message().queue_url(&system.bgg_queue2_url).message_body(body).send().await?;
     Ok(())
 }
 
-async fn remove_from_queue(system: &System, sqs_client: &sqs::Client, receipt_handle: &str) -> Result<(), Error> {
+async fn remove_from_queue(system: &System, receipt_handle: &str) -> Result<(), Error> {
     println!("Removing from queue {}", receipt_handle);
-    sqs_client.delete_message().queue_url(&system.bgg_queue1_url).receipt_handle(receipt_handle).send().await?;
+    system.sqs_client.delete_message().queue_url(&system.bgg_queue1_url).receipt_handle(receipt_handle).send().await?;
     Ok(())
 }
 

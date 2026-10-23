@@ -13,6 +13,11 @@ serde = { version = "1", features = ["derive"] }
 aws_lambda_events = "1.2.0"
 aws-sdk-ssm = "1.128.0"
 aws-sdk-sqs = "1.114.0"
+durable-execution-sdk = "0.1.0-alpha3"
+reqwest = "0.13.5"
+thiserror = "2.0.21"
+aws-sdk-s3 = "1.152.0"
+aws-sdk-lambda = "1.151.0"
 
 [lints.rust]
 linker_messages = "allow"

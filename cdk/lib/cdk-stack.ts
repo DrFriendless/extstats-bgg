@@ -64,6 +64,13 @@ export class RustDownloaderStack extends cdk.Stack {
       statements: [ useCacheBucket2]
     });
 
+    const invokeLambdas = new iam.PolicyStatement();
+    invokeLambdas.addActions("lambda:InvokeFunction");
+    invokeLambdas.addResources(`arn:aws:lambda:${process.env.CDK_DEFAULT_REGION}:${process.env.CDK_DEFAULT_ACCOUNT}:function:downloader_complete*`);
+    policies[`policy_invoke_complete`] = new iam.PolicyDocument({
+      statements: [invokeLambdas]
+    });
+
     const managedPolicies: iam.IManagedPolicy[] = [
       iam.ManagedPolicy.fromManagedPolicyName(this, "createEC2s", "CreateEC2sForLambda"),
       iam.ManagedPolicy.fromManagedPolicyName(this, "writeLogs", "WriteToCloudwatchLogs"),
@@ -89,7 +96,8 @@ export class RustDownloaderStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(3),
       allowPublicSubnet: true,
       role: downloaderRole,
-      memorySize: 128
+      memorySize: 128,
+      reservedConcurrentExecutions: 1
     });
     const downloadFunction = new RustFunction(this, 'rust_fn_download',{
       manifestPath: '../bggdl',
@@ -98,7 +106,10 @@ export class RustDownloaderStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(900),
       allowPublicSubnet: true,
       role: downloaderRole,
-      memorySize: 128
+      memorySize: 128,
+      durableConfig: {
+        executionTimeout: cdk.Duration.seconds(900),
+      }
     });
 
     if (BGG_QUEUE1) {
