@@ -34,7 +34,6 @@ async fn handler(event: SqsEvent, context: DurableContext) -> Result<(), Durable
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before 1970")
         .as_millis() as i64;
-    let mut count = 0;
     let mut results: HashMap<String, DownloadResult> = HashMap::new();
     for record in event.records {
         let Some(body) = record.body else { continue };
@@ -62,7 +61,6 @@ async fn handler(event: SqsEvent, context: DurableContext) -> Result<(), Durable
                         Err(e) => Ok(DownloadResult::failure(url, e.to_string())),
                     }
                 }, None).await?;
-                count+=1;
                 results.insert(req.url.clone(), dlr);
             }
         }
@@ -92,11 +90,11 @@ async fn dispatch(system: &System, request: &DownloadRequest, results: &HashMap<
         .collect::<Vec<_>>();
     match request.kind.as_str() {
         "continuation" => {
-            let payload= ContinuationDownloadResponse::new(request.request_id.clone(), ordered_results, request.continuation_data.clone());
+            let payload= ContinuationDownloadResponse::new(request.request_id.clone(), ordered_results, request.continuation_data.clone(), request.attempts + 1);
             let bytes = serde_json::to_vec(&payload)?;
             // println!("Continuation function: {}", request.function_name.as_ref().unwrap());
             // println!("Continuation payload:\n{}", &payload);
-            let resp = system.lambda_client.invoke()
+            let _resp = system.lambda_client.invoke()
                 .function_name(request.function_name.clone().unwrap().clone())
                 .set_invocation_type(Some(InvocationType::Event))
                 .set_payload(Some(Blob::new(bytes)))
@@ -105,7 +103,7 @@ async fn dispatch(system: &System, request: &DownloadRequest, results: &HashMap<
             Ok(())
         },
         "callback" => {
-            let payload= CallbackDownloadResponse::new(request.request_id.clone(), ordered_results);
+            let payload= CallbackDownloadResponse::new(request.request_id.clone(), ordered_results, request.attempts + 1);
             let bytes = serde_json::to_vec(&payload)?;
             let callback_id = request.callback_id.clone().ok_or("callback_id missing")?;
             system.lambda_client

@@ -40,6 +40,7 @@ pub struct DownloadRequest {
     pub kind: String,
     pub requests: Vec<URLRequest>,
     pub request_id: String,
+    pub attempts: u32,
     // for continuations
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function_name: Option<String>,
@@ -74,7 +75,8 @@ pub struct DownloadResult {
 pub struct ContinuationDownloadResponse {
     pub request_id: String,
     pub results: Vec<DownloadResult>,
-    pub continuation_data: Option<Value>
+    pub continuation_data: Option<Value>,
+    pub attempts: u32,
 }
 
 impl fmt::Display for ContinuationDownloadResponse {
@@ -85,8 +87,8 @@ impl fmt::Display for ContinuationDownloadResponse {
 }
 
 impl ContinuationDownloadResponse {
-    pub fn new(request_id: String, results: Vec<DownloadResult>, continuation_data: Option<Value>) -> Self {
-        ContinuationDownloadResponse { request_id, results, continuation_data }
+    pub fn new(request_id: String, results: Vec<DownloadResult>, continuation_data: Option<Value>, attempts: u32) -> Self {
+        ContinuationDownloadResponse { request_id, results, continuation_data, attempts }
     }
 }
 
@@ -94,12 +96,13 @@ impl ContinuationDownloadResponse {
 #[serde(rename_all = "camelCase")]
 pub struct CallbackDownloadResponse {
     pub request_id: String,
-    pub responses: Vec<DownloadResult>
+    pub responses: Vec<DownloadResult>,
+    pub attempts: u32,
 }
 
 impl CallbackDownloadResponse {
-    pub fn new(request_id: String, responses: Vec<DownloadResult>) -> Self {
-        CallbackDownloadResponse { request_id, responses }
+    pub fn new(request_id: String, responses: Vec<DownloadResult>, attempts: u32) -> Self {
+        CallbackDownloadResponse { request_id, responses, attempts }
     }
 }
 
