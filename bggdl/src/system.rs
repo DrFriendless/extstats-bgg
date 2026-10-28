@@ -17,7 +17,7 @@ pub const NEXT_TIME: &str = "/extstats/downloader/bggnext";
 pub struct URLRequest {
     pub bgg_api_key: String,
     pub url: String,
-    pub not_before: Option<i64>
+    pub not_before: Option<u128>
 }
 
 // #[derive(Debug, Deserialize, Serialize)]
@@ -41,6 +41,11 @@ pub struct DownloadRequest {
     pub requests: Vec<URLRequest>,
     pub request_id: String,
     pub attempts: u32,
+    pub initiated: u128,
+    pub scheduled: u128,
+    pub downloaded: u128,
+    pub received: u128,
+    pub completed: u128,
     // for continuations
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function_name: Option<String>,
@@ -77,6 +82,11 @@ pub struct ContinuationDownloadResponse {
     pub results: Vec<DownloadResult>,
     pub continuation_data: Option<Value>,
     pub attempts: u32,
+    pub initiated: u128,
+    pub scheduled: u128,
+    pub downloaded: u128,
+    pub received: u128,
+    pub completed: u128,
 }
 
 impl fmt::Display for ContinuationDownloadResponse {
@@ -87,8 +97,12 @@ impl fmt::Display for ContinuationDownloadResponse {
 }
 
 impl ContinuationDownloadResponse {
-    pub fn new(request_id: String, results: Vec<DownloadResult>, continuation_data: Option<Value>, attempts: u32) -> Self {
-        ContinuationDownloadResponse { request_id, results, continuation_data, attempts }
+    pub fn new(request_id: String, results: Vec<DownloadResult>, continuation_data: Option<Value>,
+               attempts: u32, initiated: u128, scheduled: u128, downloaded: u128, received: u128, completed: u128) -> Self {
+        ContinuationDownloadResponse {
+            request_id, results, continuation_data, attempts,
+            initiated, scheduled, downloaded, received, completed
+        }
     }
 }
 
@@ -98,11 +112,17 @@ pub struct CallbackDownloadResponse {
     pub request_id: String,
     pub responses: Vec<DownloadResult>,
     pub attempts: u32,
+    pub initiated: u128,
+    pub scheduled: u128,
+    pub downloaded: u128,
+    pub received: u128,
+    pub completed: u128,
 }
 
 impl CallbackDownloadResponse {
-    pub fn new(request_id: String, responses: Vec<DownloadResult>, attempts: u32) -> Self {
-        CallbackDownloadResponse { request_id, responses, attempts }
+    pub fn new(request_id: String, responses: Vec<DownloadResult>, attempts: u32,
+               initiated: u128, scheduled: u128, downloaded: u128, received: u128, completed: u128) -> Self {
+        CallbackDownloadResponse { request_id, responses, attempts, initiated, scheduled, downloaded, received, completed }
     }
 }
 
@@ -183,8 +203,8 @@ pub async fn load_system() -> Result<System, Error> {
 
     // load queues
     let resp: ListQueuesOutput = sqs_client.list_queues().queue_name_prefix("downloader").max_results(10).send().await?;
-    let url1 = resp.queue_urls().iter().find(|qu| qu.ends_with("BGGQueue1")).ok_or_else(|| "BGG Queue1 not found")?;
-    let url2 = resp.queue_urls().iter().find(|qu| qu.ends_with("BGGQueue2")).ok_or_else(|| "BGG Queue2 not found")?;
+    let url1 = resp.queue_urls().iter().find(|qu| qu.ends_with("BGGQueue1.fifo")).ok_or_else(|| "BGG Queue1 not found")?;
+    let url2 = resp.queue_urls().iter().find(|qu| qu.ends_with("BGGQueue2.fifo")).ok_or_else(|| "BGG Queue2 not found")?;
 
     let system = System::new(secrets.users_token, secrets.games_token, secrets.extras_token,
                              secrets.plays_token, secrets.collection_token, url1.clone(), url2.clone(),
