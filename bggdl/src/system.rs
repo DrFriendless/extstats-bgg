@@ -9,6 +9,7 @@ use aws_sdk_ssm as ssm;
 use aws_sdk_s3 as s3;
 use aws_sdk_lambda as lambda;
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const NEXT_TIME: &str = "/extstats/downloader/bggnext";
 
@@ -159,7 +160,7 @@ pub struct System {
     pub extras_token: String,
     pub plays_token: String,
     pub collection_token: String,
-    pub bgg_queue1_url: String,
+    // pub bgg_queue1_url: String,
     pub bgg_queue2_url: String,
     pub ssm_client: ssm::Client,
     pub sqs_client: sqs::Client,
@@ -171,11 +172,11 @@ pub struct System {
 
 impl System {
     fn new(users_token: String, games_token: String, extras_token: String, plays_token: String,
-           collection_token: String, bgg_queue1_url: String, bgg_queue2_url: String, cache_bucket: String,
+           collection_token: String, /* bgg_queue1_url: String, */ bgg_queue2_url: String, cache_bucket: String,
            ssm_client: ssm::Client, sqs_client: sqs::Client, reqwest_client: reqwest::Client,
            s3_client: s3::Client, lambda_client: lambda::Client) -> Self {
         System { users_token, games_token, extras_token, plays_token, collection_token,
-            bgg_queue1_url, bgg_queue2_url, ssm_client, sqs_client, reqwest_client, s3_client, lambda_client, cache_bucket }
+            /* bgg_queue1_url, */ bgg_queue2_url, ssm_client, sqs_client, reqwest_client, s3_client, lambda_client, cache_bucket }
     }
 }
 
@@ -203,12 +204,41 @@ pub async fn load_system() -> Result<System, Error> {
 
     // load queues
     let resp: ListQueuesOutput = sqs_client.list_queues().queue_name_prefix("downloader").max_results(10).send().await?;
-    let url1 = resp.queue_urls().iter().find(|qu| qu.ends_with("BGGQueue1.fifo")).ok_or_else(|| "BGG Queue1 not found")?;
-    let url2 = resp.queue_urls().iter().find(|qu| qu.ends_with("BGGQueue2.fifo")).ok_or_else(|| "BGG Queue2 not found")?;
+    // let url1 = resp.queue_urls().iter().find(|qu| qu.ends_with("BGGQueue1")).ok_or_else(|| "BGG Queue1 not found")?;
+    let url2 = resp.queue_urls().iter().find(|qu| qu.ends_with("BGGQueue2")).ok_or_else(|| "BGG Queue2 not found")?;
 
     let system = System::new(secrets.users_token, secrets.games_token, secrets.extras_token,
-                             secrets.plays_token, secrets.collection_token, url1.clone(), url2.clone(),
+                             secrets.plays_token, secrets.collection_token, /* url1.clone(), */ url2.clone(),
                              secrets.cache_bucket, ssm_client, sqs_client, reqwest_client, s3_client,
                              lambda_client);
     Ok(system)
+}
+
+pub async fn load_next_time(system: &System) -> Result<u128, Error> {
+    let now_ms: u128 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is before 1970")
+        .as_millis();
+    let resp = system.ssm_client.get_parameter().name(NEXT_TIME).send().await?;
+    println!("Next time: {:?}", resp);
+    let ns = resp.parameter().and_then(|p| p.value()).ok_or(now_ms.to_string())?;
+    Ok(ns.trim().parse::<u128>()?)
+}
+
+pub async fn write_next_time(system: &System, when: u128) -> Result<(), Error> {
+    system.ssm_client
+        .put_parameter().name(NEXT_TIME)
+        .value(when.to_string())
+        .r#type(ssm::types::ParameterType::String)
+        .overwrite(true)
+        .send()
+        .await?;
+    Ok(())
+}
+
+pub fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is before 1970")
+        .as_millis()
 }
