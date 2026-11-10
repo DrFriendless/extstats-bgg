@@ -64,6 +64,7 @@ export class RustDownloaderStack extends cdk.Stack {
     const invokeLambdas = new iam.PolicyStatement();
     invokeLambdas.addActions("lambda:InvokeFunction");
     invokeLambdas.addResources(`arn:aws:lambda:${process.env.CDK_DEFAULT_REGION}:${process.env.CDK_DEFAULT_ACCOUNT}:function:downloader_complete*`);
+    invokeLambdas.addResources(`arn:aws:lambda:${process.env.CDK_DEFAULT_REGION}:${process.env.CDK_DEFAULT_ACCOUNT}:function:downloader_first*`);
     policies[`policy_invoke_complete`] = new iam.PolicyDocument({
       statements: [invokeLambdas]
     });
