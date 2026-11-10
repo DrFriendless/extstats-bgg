@@ -16,9 +16,10 @@ const BIG: usize = 65536;
 pub enum BggError {
     #[error("rate limit exceeded")]
     RateLimited(),
-    #[error("some other error")]
-    SomethingElse(),
-
+    #[error("some other error {0}")]
+    SomethingElse(reqwest::StatusCode),
+    #[error("could not read response body: {0}")]
+    BodyRead(String),
     #[error(transparent)]
     Http(#[from] reqwest::Error),
 }
@@ -33,77 +34,89 @@ async fn main() -> Result<(), Error> {
 async fn handler(event: SqsEvent, context: DurableContext) -> Result<(), DurableError> {
     let system = DEPS.get().unwrap();
 
-    for record in event.records {
-        let Some(body) = record.body else { continue };
-        let request: DownloadRequest = serde_json::from_str(&body)
-            .inspect_err(|e| println!("Failed to parse request body: {e}"))?;
-        let mut results: HashMap<String, DownloadResult> = HashMap::new();
+    // We just process the first record as we are only supposed to receive one at a time.
+    // It would be silly to receive multiple as earlier ones would just get replayed for every step.
+    let Some(record) = event.records.into_iter().next() else { return Ok(()) };
+    let Some(body) = record.body.as_deref() else { return Ok(()) };
+    let request: DownloadRequest = serde_json::from_str(body)
+        .inspect_err(|e| println!("Failed to parse request body: {}", e))?;
+    let mut results: HashMap<String, DownloadResult> = HashMap::new();
 
-        for (index, req) in request.requests.iter().enumerate() {
-            let found = results.get(req.url.as_str());
-            if found.is_none() {
-                let (wait_ms, now) = context.step_named("calc wait time",|_| async {
-                    let not_before = load_next_time(&system).await?;
-                    let now = now_millis();
-                    let wms = if now < not_before { not_before - now } else { 0 };
-                    Ok::<(u128, u128), _>((wms, now))
-                }, None).await?;
-                let wait_secs = wait_ms / 1000;
-                let already_secs = (now - request.initiated) / 1000;
-                println!("{}: Got to wait {} seconds, already running for {} seconds. {}", request.request_id, wait_secs, already_secs, req.url );
-                if wait_secs > 0 {
-                    context.wait(Duration::from_seconds(wait_secs as u64), Some("rate limit wait")).await.inspect_err(|e| println!("Wait of {wait_secs} seconds failed: {e}"))?;
-                }
-                context.step_named("write next time",|_| async {
-                    write_next_time(system, now + 5000).await?;
-                    Ok(())
-                }, None).await?;
+    for (index, req) in request.requests.iter().enumerate() {
+        let request_id = request.request_id.clone();
+        let (wait_ms, now) = context.step_named("calc wait time",|_| async {
+            let not_before = load_next_time(&system).await?;
+            let now = now_millis();
+            let wms = if now < not_before { not_before - now } else { 0 };
+            Ok::<(u128, u128), _>((wms, now))
+        }, None).await?;
+        let wait_secs = wait_ms.div_ceil(1000);
+        let already_secs = now.saturating_sub(request.initiated) / 1000;
+        println!("{}: Got to wait {} seconds, already running for {} seconds. {}", request_id, wait_secs, already_secs, req.url );
+        if wait_secs > 0 {
+            log_sdk_error(&request_id, context.wait(Duration::from_seconds(wait_secs as u64), Some("rate limit wait")).await)?;
+        }
+        log_sdk_error(&request_id, context.step_named("write next time",|_| async {
+            let now = now_millis();
+            write_next_time(system, now + 5000).await?;
+            Ok(())
+        }, None).await)?;
 
-                println!("{}: Now I am allowed to download {}", request.request_id, req.url);
-                let api_key = req.bgg_api_key.clone();
-                let url = req.url.clone();
-                let req_id_for_filename = request.request_id.clone();
-                let dlr = context.step_named("BGG download",|_| async move {
-                    match fetch_xml_from_bgg(system, &api_key, &url).await {
-                        Ok(xml) => {
-                            if xml.len() > BIG {
-                                Ok(write_to_s3(&system, req.url.clone(), &xml, &req_id_for_filename, index as i32).await)
-                            } else {
-                                Ok(DownloadResult::content(url, xml))
-                            }
-                        },
-                        Err(e) => Ok(DownloadResult::failure(url, e.to_string())),
+        println!("{}: Now I am allowed to download {}", request_id, req.url);
+        let api_key = req.bgg_api_key.clone();
+        let url = req.url.clone();
+        let req_id_for_filename = request.request_id.clone();
+        let dlr: DownloadResult = log_sdk_error(&request_id, context.step_named("BGG download",|_| async move {
+            match fetch_xml_from_bgg(system, &api_key, &url, &req_id_for_filename).await {
+                Ok(xml) => {
+                    if xml.len() > BIG {
+                        Ok(write_to_s3(&system, req.url.clone(), &xml, &req_id_for_filename, index as i32).await)
+                    } else {
+                        Ok(DownloadResult::content(url, xml))
                     }
-                }, None).await;
-                match dlr {
-                    Ok(result) => {
-                        results.insert(req.url.clone(), result);
-                    }
-                    _ => {
-                        println!("Download Error: {:?}", dlr);
-                    }
-                }
+                },
+                Err(e) => Ok(DownloadResult::failure(url, e.to_string()))
             }
+        }, None).await)?;
+        let failure = dlr.kind == "failure";
+        let rate_limit = failure && dlr.error.as_deref().is_some_and(|e| e.contains("rate limit"));
+        results.insert(req.url.clone(), dlr);
+        if failure {
+            if rate_limit {
+                println!("Error: slowdown, will wait 10 seconds instead of 5.");
+                log_sdk_error(&request_id, context.step_named("write long next time",|_| async {
+                    let now = now_millis();
+                    write_next_time(system, now + 10000).await?;
+                    Ok(())
+                }, None).await)?;
+            }
+            break;
         }
-        let failures = results.values().filter(|dlr| { dlr.kind == "failure" }).count();
-        if failures > 0 {
-            let fails: Vec<&DownloadResult> = results.values().filter(|dlr| { dlr.kind == "failure" }).collect();
-            println!("Download Failures: {:?}", fails);
-            continue;
-        }
+    }
+    let failures = results.values().filter(|dlr| { dlr.kind == "failure" }).count();
+    if failures > 0 {
+        let fails: Vec<&DownloadResult> = results.values().filter(|dlr| { dlr.kind == "failure" }).collect();
+        println!("Error: download failures: {:?}", fails);
+    } else {
         let request_for_dispatch = request.clone();
         let results_for_dispatch = results.clone();
         dispatch(system, &request_for_dispatch, &results_for_dispatch, now_millis())
             .await
             .inspect_err(|e| println!("Dispatch Error: {}", e))?;
-        if record.receipt_handle.is_some() {
-            let receipt = record.receipt_handle.clone();
-            remove_from_queue(system, &receipt.unwrap())
-                .await
-                .inspect_err(|e| println!("Remove Error: {}", e))?;
-        }
+    }
+    if let Some(receipt) = record.receipt_handle.as_deref() {
+        remove_from_queue(system, receipt, &request.request_id).await?;
     }
     Ok(())
+}
+
+fn log_sdk_error<T>(request_id: &str, result: Result<T, DurableError>) -> Result<T, DurableError> {
+    if let Err(e) = &result {
+        if !e.is_suspend() {
+            println!("{request_id}: SDK error: {e}");
+        }
+    }
+    result
 }
 
 async fn dispatch(system: &System, request: &DownloadRequest, results: &HashMap<String, DownloadResult>, downloaded: u128) -> Result<(), Error> {
@@ -172,32 +185,38 @@ async fn write_to_s3(system: &System, url: String, content: &str, request_id: &s
     }
 }
 
-async fn fetch_xml_from_bgg(system: &System, token: &str, url: &str) -> Result<String, BggError> {
-    let xml = system.reqwest_client
+async fn fetch_xml_from_bgg(system: &System, token: &str, url: &str, request_id: &str) -> Result<String, BggError> {
+    let resp = system.reqwest_client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/xml")
         .bearer_auth(token)
         .send()
-        .await?
-        .text()
-        .await;
-    match xml {
-        Ok(xml) => {
-            if xml.contains("Rate limit exceeded") {
-                println!("Rate limit exceeded downloading {url}");
-                Err(BggError::RateLimited())
-            } else {
-                Ok(xml)
-            }
-        },
-        _ => { println!("{:?}", xml); Err(BggError::SomethingElse()) }
+        .await?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        println!("{request_id}: HTTP 429 downloading {url}");
+        return Err(BggError::RateLimited());
+    }
+    if !status.is_success() {
+        println!("{request_id}: HTTP {status} downloading {url}");
+        return Err(BggError::SomethingElse(status));
+    }
+    let xml = resp.text().await.map_err(|e| BggError::BodyRead(e.to_string()))?;
+    if xml.contains("Rate limit exceeded") {
+        println!("{request_id}: Error: Rate limit exceeded downloading {url}");
+        Err(BggError::RateLimited())
+    } else {
+        Ok(xml)
     }
 }
 
-async fn remove_from_queue(system: &System, receipt_handle: &str) -> Result<(), Error> {
-    println!("Removing from queue {}", receipt_handle);
-    let resp = system.sqs_client.delete_message().queue_url(&system.bgg_queue2_url).receipt_handle(receipt_handle).send().await;
-    println!("SqsResponse: {:?}", resp);
+async fn remove_from_queue(system: &System, receipt_handle: &str, request_id: &str) -> Result<(), Error> {
+    let resp = system.sqs_client.delete_message().queue_url(&system.input_queue_url).receipt_handle(receipt_handle).send().await;
+    if !resp.is_ok() {
+        println!("{}: Error deleting from queue: {}", request_id, resp.err().unwrap());
+    } else {
+        println!("{}: deleted from queue", request_id);
+    }
     Ok(())
 }
 

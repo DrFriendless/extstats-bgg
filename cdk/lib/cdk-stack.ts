@@ -14,7 +14,7 @@ let CACHE_BUCKET: s3.IBucket | undefined = undefined;
 export class RustDownloaderStack extends cdk.Stack {
   lookupExternalResources() {
     // resources external to this stack
-    const q2 = cdk.Fn.importValue('downloader-BGGQueue2ARN');
+    const q2 = cdk.Fn.importValue('downloader-InputQueueARN');
     BGG_QUEUE2 = sqs.Queue.fromQueueAttributes(this, "bggQueue2", { queueArn: q2 });
     CACHE_BUCKET = s3.Bucket.fromBucketName(this, "cacheBucket", CACHE_BUCKET_NAME);
   }

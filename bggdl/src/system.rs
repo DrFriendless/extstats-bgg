@@ -160,8 +160,7 @@ pub struct System {
     pub extras_token: String,
     pub plays_token: String,
     pub collection_token: String,
-    // pub bgg_queue1_url: String,
-    pub bgg_queue2_url: String,
+    pub input_queue_url: String,
     pub ssm_client: ssm::Client,
     pub sqs_client: sqs::Client,
     pub s3_client: s3::Client,
@@ -172,11 +171,11 @@ pub struct System {
 
 impl System {
     fn new(users_token: String, games_token: String, extras_token: String, plays_token: String,
-           collection_token: String, /* bgg_queue1_url: String, */ bgg_queue2_url: String, cache_bucket: String,
+           collection_token: String, input_queue_url: String, cache_bucket: String,
            ssm_client: ssm::Client, sqs_client: sqs::Client, reqwest_client: reqwest::Client,
            s3_client: s3::Client, lambda_client: lambda::Client) -> Self {
         System { users_token, games_token, extras_token, plays_token, collection_token,
-            /* bgg_queue1_url, */ bgg_queue2_url, ssm_client, sqs_client, reqwest_client, s3_client, lambda_client, cache_bucket }
+            input_queue_url, ssm_client, sqs_client, reqwest_client, s3_client, lambda_client, cache_bucket }
     }
 }
 
@@ -204,11 +203,10 @@ pub async fn load_system() -> Result<System, Error> {
 
     // load queues
     let resp: ListQueuesOutput = sqs_client.list_queues().queue_name_prefix("downloader").max_results(10).send().await?;
-    // let url1 = resp.queue_urls().iter().find(|qu| qu.ends_with("BGGQueue1")).ok_or_else(|| "BGG Queue1 not found")?;
-    let url2 = resp.queue_urls().iter().find(|qu| qu.ends_with("BGGQueue2")).ok_or_else(|| "BGG Queue2 not found")?;
+    let input_url = resp.queue_urls().iter().find(|qu| qu.ends_with("InputQueue.fifo")).ok_or_else(|| "Input queue not found")?;
 
     let system = System::new(secrets.users_token, secrets.games_token, secrets.extras_token,
-                             secrets.plays_token, secrets.collection_token, /* url1.clone(), */ url2.clone(),
+                             secrets.plays_token, secrets.collection_token, input_url.clone(),
                              secrets.cache_bucket, ssm_client, sqs_client, reqwest_client, s3_client,
                              lambda_client);
     Ok(system)
@@ -226,6 +224,7 @@ pub async fn load_next_time(system: &System) -> Result<u128, Error> {
 }
 
 pub async fn write_next_time(system: &System, when: u128) -> Result<(), Error> {
+    println!("Next time: {:?}", when);
     system.ssm_client
         .put_parameter().name(NEXT_TIME)
         .value(when.to_string())
