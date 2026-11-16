@@ -41,6 +41,10 @@ async fn handler(event: SqsEvent, context: DurableContext) -> Result<(), Durable
     let request: DownloadRequest = serde_json::from_str(body)
         .inspect_err(|e| println!("Failed to parse request body: {}", e))?;
     let mut results: HashMap<String, DownloadResult> = HashMap::new();
+    let compress = request.continuation_data.as_ref()
+        .and_then(|cd| cd.get("compress"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     for (index, req) in request.requests.iter().enumerate() {
         let request_id = request.request_id.clone();
@@ -69,8 +73,8 @@ async fn handler(event: SqsEvent, context: DurableContext) -> Result<(), Durable
         let dlr: DownloadResult = log_sdk_error(&request_id, context.step_named("BGG download",|_| async move {
             match fetch_xml_from_bgg(system, &api_key, &url, &req_id_for_filename).await {
                 Ok(xml) => {
-                    if xml.len() > BIG {
-                        Ok(write_to_s3(&system, req.url.clone(), &xml, &req_id_for_filename, index as i32).await)
+                    if compress || (xml.len() > BIG) {
+                        Ok(write_to_s3(&system, req.url.clone(), &xml, &req_id_for_filename, now as u128).await)
                     } else {
                         Ok(DownloadResult::content(url, xml))
                     }
@@ -169,8 +173,8 @@ async fn dispatch(system: &System, request: &DownloadRequest, results: &HashMap<
     }
 }
 
-async fn write_to_s3(system: &System, url: String, content: &str, request_id: &str, index: i32) -> DownloadResult {
-    let object_key = format!("{request_id}-{index}.xml");
+async fn write_to_s3(system: &System, url: String, content: &str, request_id: &str, ts: u128) -> DownloadResult {
+    let object_key = format!("{request_id}-{ts}.xml");
     match system.s3_client
         .put_object()
         .bucket(&system.cache_bucket)
