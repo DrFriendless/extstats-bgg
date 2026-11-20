@@ -219,7 +219,7 @@ async fn remove_from_queue(system: &System, receipt_handle: &str, request_id: &s
     if !resp.is_ok() {
         println!("{}: Error deleting from queue: {}", request_id, resp.err().unwrap());
     } else {
-        println!("{}: deleted from queue", request_id);
+        // println!("{}: deleted from queue", request_id);
     }
     Ok(())
 }
